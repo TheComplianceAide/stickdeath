@@ -1,0 +1,328 @@
+Awesome—let’s turn “Stick Death” into a **clear, code-ready spec** that an OpenAI Codex-style agent can follow to generate the entire game **as one HTML file**, running **client‑side only**, on **desktop + mobile**.
+Below is a *drop-in brief* + *task plan* + *acceptance tests* you can paste into your code agent as instructions.
+
+> **Tone & safety**: We’ll use stylized stick-figure physics and “blood” particles. Include a **Gore slider** (Off → Mild → Full) and default to **Mild** so the output stays broadly acceptable.
+
+---
+
+## 0) Codex Agent System Prompt (paste this first)
+
+**Role:** You are a meticulous front-end game engineer.
+**Goal:** Produce a **single self-contained `index.html`** that implements “Stick Death”—a minimalist stick-figure arena shooter with **ragdoll deaths**, **funny physics**, and **no servers, no external CDNs, no assets**. Everything must run offline in a modern browser.
+
+**Strict requirements**
+
+1. **One file only**: `index.html` containing HTML, CSS, JS (type=module). No external links or imports.
+2. **No libraries**: implement **position‑based dynamics (Verlet)** for ragdolls yourself; do **not** use external physics engines.
+3. **Canvas 2D only**: use a single `<canvas>` filling the viewport; render at device pixel ratio (cap to 2x for perf).
+4. **Mobile + Desktop**: WASD/Arrow + mouse; mobile twin-stick (left half = move, right half = aim/shoot).
+5. **Accessibility & Controls**: Pause (Space), Restart (R), Mute (M), Gore (G toggles Off/Mild/Full).
+6. **Performance**: target 60 FPS. If frame time > 16ms, automatically reduce ragdoll solver iterations and particle count.
+7. **Art style**: white field, thin gray ground line, black sticks, soft shadows; comedic slow‑mo on headshots; camera shake on big impacts.
+8. **Audio**: synth with Web Audio API (no files).
+9. **Comment quality**: brief module headers + key function comments.
+10. **No network use**: must work from `file://`.
+
+**Deliverable:** Return only the full `index.html`. End with `<!-- END -->`.
+
+---
+
+## 1) High-Level Game Spec (for the agent)
+
+**Premise**
+You (hero stick) move on a white field and shoot oncoming stick enemies. On impact, enemies switch to ragdoll and collapse with stylized blood particles and decals. The humor is in the physics and timing.
+
+**Core Loop**
+
+* Spawn waves of enemies → approach player.
+* Aim & shoot → hit detection → apply impulse → enemy switches to ragdoll → limb detach chance → blood particles + decals → score & combo.
+* Between waves, brief breather and weapon upgrade choice.
+
+**Minimum Feature Set (MVP)**
+
+1. **Player**
+
+   * Move left/right; optional short hop or dash (Shift).
+   * Aim with mouse / right thumb.
+   * Fire pistol (semi-auto).
+2. **Enemies**
+
+   * Two types in MVP: Runner (fast, low HP) and Brute (slow, more mass).
+   * Pathfind simply in a straight line along ground toward player.
+3. **Ragdoll**
+
+   * Stick body built from points + constraints (see schema below).
+   * Breakable constraints (e.g., forearm, lower leg) with impulse threshold.
+   * 5–8 solver iterations per frame (adaptive).
+4. **Weapons**
+
+   * Pistol (base), Shotgun (spread), SMG (auto).
+   * Muzzle flash & recoil; screen shake on shotgun.
+5. **Collisions**
+
+   * Bullet vs. limb as **capsule** (segment + radius) intersection.
+   * Apply impulse along bullet normal; spawn particles; maybe detach a constraint if impulse > threshold.
+6. **VFX**
+
+   * Blood particles (circles/lines) with gravity, friction, fade.
+   * **Decal layer**: low‑cost splats painted to a backing canvas buffer.
+   * Hit pause (tiny 60–90 ms) + **slow‑mo** (0.35× for \~600 ms) on headshots.
+7. **UI**
+
+   * Glassy pills: Score, Combo, Weapon, Wave, Gore mode.
+   * Bottom-right buttons on mobile: Pause, Mute, Restart.
+8. **Audio**
+
+   * Simple synthesized shot, hit thwack, splat fizz.
+9. **Meta**
+
+   * LocalStorage: high score + preferred gore level + last weapon.
+   * Pause/Resume overlay.
+
+---
+
+## 2) Technical Design (what the agent should build)
+
+### 2.1 Canvas & Render Order
+
+* **Main canvas** sized to CSS pixels; internal buffer uses `DPR = min(devicePixelRatio, 2)`.
+* **Draw order**:
+
+  1. Decal buffer (blood splats)
+  2. Ground + player + live enemies (non-ragdoll)
+  3. Ragdolls (bones/limbs)
+  4. Particles (blood)
+  5. Muzzle flashes & UI crosshair
+  6. HUD (DOM overlay text or canvas text—choose one; DOM is fine)
+
+### 2.2 Ragdoll Physics (Position-Based Dynamics / Verlet)
+
+**Point**: `{x, y, px, py, mass, pinned=false}`
+**Constraint**: `{i, j, rest, stiff, breakThresh, broken=false}` where `i/j` are point indices.
+
+**Solver (per frame)**
+
+1. Integrate points:
+
+   ```
+   vx = (x - px), vy = (y - py);
+   px = x; py = y;
+   x += vx * air + gx * dt2;
+   y += vy * air + gy * dt2;
+   ```
+
+   where `air`≈0.998, `gx,gy` gravity (0, 2000 px/s² scaled), `dt2 = (dt*dt)`.
+2. Satisfy constraints (iterate N times):
+
+   ```
+   dx = xj - xi; dy = yj - yi; dist = sqrt(dx*dx+dy*dy);
+   diff = (dist - rest) / dist;
+   if (!broken) {
+     corr = 0.5 * stiff * diff;
+     xi += dx * corr; yi += dy * corr;
+     xj -= dx * corr; yj -= dy * corr;
+     if (|dist - rest| > breakThresh) broken = true; // detach
+   }
+   ```
+3. Floor & walls: clamp to arena rectangle; apply bounce damp.
+
+**Capsule hit test** (bullet vs limb segment):
+
+* Project bullet point onto segment; measure closest distance; compare ≤ radius.
+
+**Impulse to ragdoll**
+
+* When hit, compute bullet momentum `p = mass_bullet * speed`. Apply as positional nudge to all points within limb group; bias head for headshots.
+
+### 2.3 Stick Body Schema (indices are illustrative)
+
+```
+points: [
+  headTop, headBot,
+  neck,
+  chest, pelvis,
+  lShoulder, lElbow, lHand,
+  rShoulder, rElbow, rHand,
+  lHip, lKnee, lFoot,
+  rHip, rKnee, rFoot
+]
+bones (constraints with radii for rendering):
+  headTop-headBot (r=8)
+  headBot-neck    (r=5)
+  neck-chest      (r=4)
+  chest-pelvis    (r=4)
+  shoulders/arms: lShoulder-lElbow (r=3), lElbow-lHand (r=3), and mirrored
+  hips/legs: lHip-lKnee (r=3), lKnee-lFoot (r=3), and mirrored
+extras:
+  clavicles: chest-lShoulder, chest-rShoulder (stiff=0.7)
+  pelvis-hips, chest-shoulders (short cross constraints to stabilize)
+```
+
+* Mark **forearm**, **lower leg**, and **neck** constraints as **breakable** with thresholds.
+* Store a small **render radius** per bone for capsule collisions and visuals.
+
+### 2.4 Weapons (data-driven)
+
+```
+WEAPONS = {
+  pistol:  { rpm: 360,  spread: 0,    bullets: 1, dmg: 35, speed: 1600, knock: 0.8,  recoil: 0.45 },
+  smg:     { rpm: 840,  spread: 4,    bullets: 1, dmg: 20, speed: 1400, knock: 0.55, recoil: 0.15, auto:true },
+  shotgun: { rpm: 90,   spread: 10,   bullets: 7, dmg: 12, speed: 1300, knock: 1.3,  recoil: 1.0,  pellet:true }
+}
+```
+
+* Recoil = quick camera kick + slight player pushback.
+* Knock applies extra impulse to ragdolls on hit.
+
+### 2.5 Particles & Decals
+
+* **Particles**: structs `{x,y,vx,vy,life,drag,sz}`; spawn count scales with **Gore**.
+* **Decals**: draw to an **offscreen canvas** (“splat layer”) with low-frequency updates (e.g., every 2–3 frames). Use alpha‑blended circles/ovals; clamp total splat count to avoid VRAM bloat.
+
+### 2.6 Game State & Systems
+
+* `state`: timers, wave number, score, combo, slowMoFactor (1→0.35), cameraShake.
+* **Spawner**: increases wave size and Brute ratio; caps concurrent enemies for perf.
+* **Scoring**: Headshot bonus; air‑juggle bonus; multi‑kill bonus within 1s window.
+* **Difficulty**: Enemy spawn interval shrinks per wave.
+
+### 2.7 Controls
+
+* **Desktop**: WASD/Arrows move; mouse aim; LMB fire; RMB (or Shift) dash; Space pause; R restart; M mute; G gore cycle.
+* **Mobile**:
+
+  * Left half = virtual stick (deadzone; smooth).
+  * Right half = aim joystick; single tap = quick fire; hold = auto fire (if weapon supports).
+  * On-screen buttons: Pause, Mute, Restart.
+
+### 2.8 Audio (synth)
+
+* Create one `AudioContext`.
+* **Gun**: short noise burst + sine partial; envelope 60–120 ms.
+* **Hit**: low thump; **Splat**: filtered noise tick.
+* Global mute toggle; respect iOS tap-to-start.
+
+### 2.9 Performance Budget
+
+* Max 10 ragdolls active; after that, oldest fades to “bones only” then despawn.
+* Solver iterations: 6 (60 FPS), 4 (mid), 3 (low).
+* Particle cap: 400 (Full), 250 (Mild), 0 (Off).
+* DPR cap = 2; drop to 1.5 or 1 if frame time > 28ms for 0.5s.
+
+---
+
+## 3) Implementation Tasks (give these to the agent one by one if you want checkpoints)
+
+### Task 1 — Bootstrap & Loop
+
+**Goal:** Fullscreen canvas, DPR scaling, fixed‑timestep game loop, resize handling, input stubs, HUD stubs.
+**Accept:** Canvas clears white, shows “Score: 0 • Wave 1 • Pistol” pills; FPS is stable.
+
+### Task 2 — Basic Player + Aiming + Firing
+
+**Goal:** Player stick placeholder (simple rectangle for now), crosshair following aim, pistol that spawns raycast bullets.
+**Accept:** Click/tap fires; a visible tracer line appears briefly; cooldown respected.
+
+### Task 3 — Ragdoll Engine (PBD/Verlet)
+
+**Goal:** Implement `Point`, `Constraint`, integration, solver iterations, world bounds.
+**Accept:** A standalone ragdoll instance falls and settles on the ground with plausible motion.
+
+### Task 4 — Enemy Stick Construction
+
+**Goal:** Build enemy ragdoll from schema with radii; walk cycle (non-physics) while alive; switch to ragdoll on death.
+**Accept:** Runners approach; on simulated “kill()”, they collapse believably.
+
+### Task 5 — Bullet Collision & Impulse
+
+**Goal:** Capsule hit test limb-by-limb; on hit: apply impulse, damage, chance to break a constraint.
+**Accept:** Shots viscerally flip enemies; headshots trigger slow‑mo.
+
+### Task 6 — Particles & Decals
+
+**Goal:** Blood particles + splat decals; Gore modes: Off/Mild/Full.
+**Accept:** Headshot produces more particles; decals persist; perf remains >45 FPS on mid hardware.
+
+### Task 7 — Weapons & Recoil & Shake
+
+**Goal:** Implement SMG and Shotgun; muzzle flashes; recoil kick; camera shake; combo scoring.
+**Accept:** Shotgun creates spread; screen shakes harder; score increments with bonuses.
+
+### Task 8 — Mobile Controls & UI Buttons
+
+**Goal:** Left/right virtual sticks; buttons for Pause/Mute/Restart; responsive layout.
+**Accept:** On a phone, you can move, aim, and shoot; UI is tappable; orientation changes work.
+
+### Task 9 — Waves, Difficulty, Persistence
+
+**Goal:** Spawner, wave pacing, high score via localStorage; pause/resume overlay; gore toggle.
+**Accept:** Completing a wave increases enemy count; settings persist across reload; pause overlay works.
+
+### Task 10 — Polish & Safeguards
+
+**Goal:** Time dilation polish, hit pause, enemy variety (Brute mass/HP), despawn funnel, perf auto‑downgrade.
+**Accept:** Stable frame time, no console errors, clean code comments.
+
+---
+
+## 4) Key Algorithms & Snippets (for guidance inside the file)
+
+**Segment–Point distance (for capsule tests)**
+
+```js
+function distPointToSegment(px, py, ax, ay, bx, by){
+  const abx = bx - ax, aby = by - ay;
+  const apx = px - ax, apy = py - ay;
+  const t = Math.max(0, Math.min(1, (apx*abx + apy*aby) / (abx*abx + aby*aby)));
+  const cx = ax + abx*t, cy = ay + aby*t;
+  const dx = px - cx, dy = py - cy;
+  return Math.hypot(dx, dy);
+}
+// capsule hit if dist <= radius
+```
+
+**Headshot detection**
+
+* Keep a list of head bones (headTop–headBot). If any capsule is hit, mark `isHeadshot = true`.
+
+**Slow‑mo**
+
+* `timeScale = lerp(timeScale, target, 0.1)`; on headshot set `target = 0.35` for 600ms, then back to 1.0.
+
+**Camera shake**
+
+* `shake = max(shake, impulse * k)`; render offset `ox = (rand()-0.5)*shake`, `oy = (rand()-0.5)*shake`; decay each frame.
+
+---
+
+## 5) UI & Controls Map
+
+* **Desktop**: `A/D` or `←/→` move, `Mouse` aim, `LMB` fire, `Shift` dash, `Space` pause, `R` restart, `M` mute, `G` gore cycle.
+* **Mobile**: Left drag = movement stick; right drag = aim; right tap = fire; bottom buttons for Pause/Mute/Restart; top-right gore toggle.
+
+---
+
+## 6) Acceptance Test Checklist (final QA for the agent)
+
+* [ ] Open `index.html` locally (`file://`) → starts instantly with no network requests.
+* [ ] Maintains \~60 FPS with ≤ 6 ragdolls; gracefully degrades on older phones.
+* [ ] Headshot triggers slow‑mo and bigger splat; shotgun creates screen shake.
+* [ ] Gore toggle cycles Off → Mild → Full and persists (localStorage).
+* [ ] Mobile twin‑stick works in Safari/Chrome; UI scales; orientation change OK.
+* [ ] No unhandled errors; pausing works; restart resets wave but keeps settings.
+* [ ] Code is commented and logically sectioned; constants at top for easy tuning.
+
+---
+
+## 7) One-Shot Build Prompt (if you want Codex to emit the full file in one go)
+
+> **Prompt to the code agent:**
+> “Generate a complete, single‑file `index.html` implementing the ‘Stick Death’ spec below. Use Canvas2D, ES modules, and a custom Verlet/PBD ragdoll solver. No external libraries or CDNs. Include responsive controls for desktop and mobile, synthetic Web Audio, gore toggle with Off/Mild/Full, decals, slow‑mo on headshots, shotgun screen shake, adaptive performance (iterations/particles/DPR). Ensure it runs offline from `file://`. End the file with `<!-- END -->`. Then stop.”
+
+(Then paste **Sections 1–6** above under “spec below”.)
+
+---
+
+## 8) Next step (optional)
+
+If you want, I can **generate the full `index.html`** now following this exact brief—start to finish—so you can open it and play immediately.

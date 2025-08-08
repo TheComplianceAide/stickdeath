@@ -1,0 +1,1400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Stick Death — Single File</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #fff;
+    height: 100%;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji;
+  }
+  canvas#game {
+    position: fixed;
+    inset: 0;
+    display: block;
+  }
+  /* HUD pills */
+  .hud {
+    position: fixed;
+    top: env(safe-area-inset-top, 8px);
+    left: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    z-index: 10;
+    pointer-events: none;
+  }
+  .pill {
+    pointer-events: auto;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.8);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    color: #111;
+    font-weight: 600;
+    font-size: 13px;
+    backdrop-filter: saturate(1.2) blur(6px);
+    -webkit-backdrop-filter: saturate(1.2) blur(6px);
+  }
+  .pill.badge {
+    background: rgba(240, 244, 255, 0.9);
+  }
+  .top-right {
+    position: fixed;
+    top: env(safe-area-inset-top, 8px);
+    right: 8px;
+    display: flex;
+    gap: 8px;
+    z-index: 12;
+  }
+  .btn {
+    pointer-events: auto;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.9);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    color: #111;
+    font-weight: 700;
+    font-size: 14px;
+    border: 1px solid rgba(0,0,0,0.05);
+    user-select: none;
+  }
+  .btn:active { transform: translateY(1px); }
+  /* Mobile bottom-right controls */
+  .mobile-controls {
+    position: fixed;
+    right: 8px;
+    bottom: env(safe-area-inset-bottom, 8px);
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 12;
+  }
+  .mobile-controls .btn {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  /* Virtual sticks */
+  .stick {
+    position: fixed;
+    bottom: 14vh;
+    width: 160px;
+    height: 160px;
+    margin: -80px 0 0 -80px;
+    border-radius: 50%;
+    border: 2px solid rgba(0,0,0,0.08);
+    background: rgba(255,255,255,0.5);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+    display: none;
+    z-index: 11;
+  }
+  .stick .nub {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 64px; height: 64px;
+    margin: -32px; border-radius: 50%;
+    background: rgba(0,0,0,0.12);
+    box-shadow: inset 0 2px 8px rgba(0,0,0,0.15);
+  }
+  .overlay {
+    position: fixed; inset: 0;
+    background: rgba(255,255,255,0.9);
+    color: #111;
+    display: none;
+    align-items: center; justify-content: center;
+    text-align: center;
+    z-index: 20;
+  }
+  .overlay .card {
+    padding: 20px 24px;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.12);
+    max-width: min(90vw, 540px);
+  }
+  .overlay h1 {
+    margin: 0 0 8px;
+    font-size: 24px;
+  }
+  .overlay p {
+    margin: 6px 0;
+    opacity: 0.8;
+  }
+  .overlay .row {
+    margin-top: 12px;
+    display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;
+  }
+  /* Crosshair */
+  .crosshair {
+    position: fixed; width: 24px; height: 24px;
+    margin: -12px 0 0 -12px;
+    pointer-events: none; z-index: 5; display: none;
+  }
+  @media (hover: none), (pointer: coarse) {
+    .mobile-controls { display: flex; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<!-- HUD -->
+<div class="hud" id="hud">
+  <div class="pill" id="scorePill">Score: 0</div>
+  <div class="pill" id="comboPill">Combo: 0x</div>
+  <div class="pill badge" id="weaponPill">Pistol</div>
+  <div class="pill" id="wavePill">Wave 1</div>
+  <div class="pill" id="gorePill">Gore: Mild</div>
+  </div>
+<div class="top-right">
+  <button class="btn" id="pauseBtn">Pause</button>
+  <button class="btn" id="muteBtn">Mute</button>
+  <button class="btn" id="restartBtn">Restart</button>
+</div>
+<!-- Mobile control buttons -->
+<div class="mobile-controls">
+  <button class="btn" id="pauseBtnM">Pause</button>
+  <button class="btn" id="muteBtnM">Mute</button>
+  <button class="btn" id="restartBtnM">Restart</button>
+</div>
+
+<!-- Virtual sticks (appear only during touch) -->
+<div class="stick" id="leftStick"><div class="nub"></div></div>
+<div class="stick" id="rightStick"><div class="nub"></div></div>
+
+<!-- Crosshair (desktop) -->
+<svg class="crosshair" id="crosshair" viewBox="0 0 24 24">
+  <circle cx="12" cy="12" r="5" fill="none" stroke="rgba(0,0,0,0.5)" stroke-width="1"/>
+  <path d="M12 0v6M12 18v6M0 12h6M18 12h6" stroke="rgba(0,0,0,0.4)" stroke-width="1" />
+</svg>
+
+<!-- Pause overlay -->
+<div class="overlay" id="pauseOverlay">
+  <div class="card">
+    <h1>Paused</h1>
+    <p>WASD/Arrows to move, Mouse to aim, LMB to shoot, Shift to dash.</p>
+    <p>Space: Pause, R: Restart, M: Mute, G: Gore cycle</p>
+    <div class="row">
+      <button class="btn" id="resumeBtn">Resume</button>
+      <button class="btn" id="overlayRestartBtn">Restart</button>
+      <button class="btn" id="goreBtn">Gore: Mild</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+/* Stick Death — Single-file canvas game
+   Modules: Canvas, Input, Physics (Verlet/PBD), Entities, Weapons, VFX, Audio, Game Loop
+*/
+
+/* =========================
+   Constants and State
+========================= */
+const DPR_CAPS = [2, 1.5, 1];
+let DPR = Math.min(window.devicePixelRatio || 1, DPR_CAPS[0]);
+
+const GROUND_Y_FRAC = 0.82; // ground line at 82% height
+const WORLD_MARGIN = 24; // walls margin
+const GRAVITY = 2000; // px/s^2
+const AIR = 0.998; // air friction for verlet
+const MAX_RAGDOLLS = 10;
+
+const GORE_MODES = ["Off","Mild","Full"];
+const DEFAULT_GORE = localStorage.getItem("stick_gore") || "Mild";
+let goreMode = GORE_MODES.includes(DEFAULT_GORE) ? DEFAULT_GORE : "Mild";
+
+const WEAPONS = {
+  pistol:  { name: "Pistol",  rpm: 360,  spread: 0,   bullets: 1, dmg: 35, speed: 1600, knock: 0.8,  recoil: 0.45, auto:false },
+  smg:     { name: "SMG",     rpm: 840,  spread: 4,   bullets: 1, dmg: 20, speed: 1400, knock: 0.55, recoil: 0.15, auto:true },
+  shotgun: { name: "Shotgun", rpm: 90,   spread: 10,  bullets: 7, dmg: 12, speed: 1300, knock: 1.3,  recoil: 1.0,  auto:false, pellet:true }
+};
+const WEAPON_ORDER = ["pistol","smg","shotgun"];
+let lastWeaponKey = localStorage.getItem("stick_weapon") || "pistol";
+if(!WEAPONS[lastWeaponKey]) lastWeaponKey = "pistol";
+
+const COLORS = {
+  stick: "#111",
+  ground: "rgba(0,0,0,0.2)",
+  shadow: "rgba(0,0,0,0.08)",
+  tracer: "rgba(0,0,0,0.35)",
+  muzzle: "rgba(255,160,80,0.6)",
+  blood: "#a10c0c"
+};
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d", { alpha: false });
+
+const splatCanvas = document.createElement("canvas");
+const splatCtx = splatCanvas.getContext("2d");
+
+const crosshairEl = document.getElementById("crosshair");
+const hudEls = {
+  score: document.getElementById("scorePill"),
+  combo: document.getElementById("comboPill"),
+  weapon: document.getElementById("weaponPill"),
+  wave: document.getElementById("wavePill"),
+  gore: document.getElementById("gorePill"),
+};
+const pauseOverlay = document.getElementById("pauseOverlay");
+
+const btns = {
+  pause: document.getElementById("pauseBtn"),
+  mute: document.getElementById("muteBtn"),
+  restart: document.getElementById("restartBtn"),
+  pauseM: document.getElementById("pauseBtnM"),
+  muteM: document.getElementById("muteBtnM"),
+  restartM: document.getElementById("restartBtnM"),
+  resume: document.getElementById("resumeBtn"),
+  overlayRestart: document.getElementById("overlayRestartBtn"),
+  gore: document.getElementById("goreBtn")
+};
+
+const leftStick = document.getElementById("leftStick");
+const rightStick = document.getElementById("rightStick");
+
+let W = 0, H = 0, groundY = 0, worldLeft = 0, worldRight = 0;
+
+function updateHUD() {
+  hudEls.score.textContent = `Score: ${state.score}`;
+  hudEls.combo.textContent = `Combo: ${state.combo.toFixed(1)}x`;
+  hudEls.weapon.textContent = WEAPONS[state.weapon].name;
+  hudEls.wave.textContent = `Wave ${state.wave}`;
+  hudEls.gore.textContent = `Gore: ${goreMode}`;
+  btns.gore.textContent = `Gore: ${goreMode}`;
+}
+function cycleGore() {
+  const idx = GORE_MODES.indexOf(goreMode);
+  goreMode = GORE_MODES[(idx+1)%GORE_MODES.length];
+  localStorage.setItem("stick_gore", goreMode);
+  updateHUD();
+}
+
+const state = {
+  time: 0,
+  score: 0,
+  high: Number(localStorage.getItem("stick_high") || 0),
+  combo: 0,
+  comboTimer: 0,
+  wave: 1,
+  weapon: lastWeaponKey,
+  muted: localStorage.getItem("stick_mute")==="1",
+  paused: false,
+  wantPauseOverlay: false,
+  slowMoT: 1.0,
+  slowMoTarget: 1.0,
+  slowMoTimer: 0,
+  hitPauseTimer: 0,
+  shake: 0,
+  perf: { frameMsAvg: 16, iterTarget: 6, dprTier: 0, particleCap: 250 },
+};
+
+function savePersistent() {
+  localStorage.setItem("stick_high", String(state.high));
+  localStorage.setItem("stick_weapon", state.weapon);
+  localStorage.setItem("stick_mute", state.muted ? "1" : "0");
+}
+
+/* =========================
+   Utilities
+========================= */
+const TAU = Math.PI*2;
+const rand = Math.random;
+const clamp = (v,a,b)=> Math.max(a, Math.min(b, v));
+const lerp = (a,b,t)=> a+(b-a)*t;
+const mix = (a,b,t)=> a+(b-a)*t;
+const easeOut = (t)=> 1 - Math.pow(1-t, 2);
+
+function now() { return performance.now(); }
+
+function vecLen(x,y){ return Math.hypot(x,y); }
+function norm(x,y){ const d = Math.hypot(x,y)||1; return [x/d,y/d]; }
+function angleOf(dx,dy){ return Math.atan2(dy,dx); }
+function randRange(a,b){ return a + (b-a)*Math.random(); }
+
+function distPointToSegment(px, py, ax, ay, bx, by){
+  const abx = bx - ax, aby = by - ay;
+  const apx = px - ax, apy = py - ay;
+  const ab2 = abx*abx + aby*aby;
+  if (ab2 === 0) return Math.hypot(px-ax, py-ay);
+  const t = Math.max(0, Math.min(1, (apx*abx + apy*aby) / ab2));
+  const cx = ax + abx*t, cy = ay + aby*t;
+  const dx = px - cx, dy = py - cy;
+  return Math.hypot(dx, dy);
+}
+
+function pointOnSegment(ax,ay,bx,by,t){ return [ax+(bx-ax)*t, ay+(by-ay)*t]; }
+function closestTOnSegment(px, py, ax, ay, bx, by){
+  const abx = bx - ax, aby = by - ay;
+  const apx = px - ax, apy = py - ay;
+  const ab2 = abx*abx + aby*aby;
+  if (ab2 === 0) return 0;
+  return Math.max(0, Math.min(1, (apx*abx + apy*aby) / ab2));
+}
+
+/* =========================
+   Canvas & Resize
+========================= */
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, DPR_CAPS[state.perf.dprTier] || 1);
+  W = canvas.width = Math.round(window.innerWidth * DPR);
+  H = canvas.height = Math.round(window.innerHeight * DPR);
+  canvas.style.width = window.innerWidth + "px";
+  canvas.style.height = window.innerHeight + "px";
+  groundY = Math.round(H * GROUND_Y_FRAC);
+  worldLeft = Math.round(WORLD_MARGIN * DPR);
+  worldRight = Math.round(W - WORLD_MARGIN * DPR);
+  // Splats buffer
+  splatCanvas.width = W;
+  splatCanvas.height = H;
+  splatCtx.clearRect(0,0,W,H);
+}
+window.addEventListener("resize", resize);
+
+/* =========================
+   Audio (simple synth)
+========================= */
+const Audio = {
+  ctx: null,
+  muted: state.muted,
+  init() {
+    if (this.ctx) return;
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (this.ctx.state === "suspended") this.ctx.resume();
+    } catch(e) {
+      console.warn("Audio init failed", e);
+    }
+  },
+  resumeOnGesture() {
+    if (!this.ctx) this.init();
+    if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+  },
+  shoot(weaponKey=state.weapon) {
+    if (this.muted || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Short percussive click + noise
+    const g = this.ctx.createGain();
+    const osc = this.ctx.createOscillator();
+    const n = this.ctx.createBufferSource();
+    const noiseBuf = this.ctx.createBuffer(1, 4410, 44100);
+    const data = noiseBuf.getChannelData(0);
+    for (let i=0; i<data.length; i++) data[i] = (Math.random()*2-1)*(Math.random());
+    n.buffer = noiseBuf;
+    n.loop = false;
+
+    const w = WEAPONS[weaponKey] || WEAPONS.pistol;
+    const base = 340 + Math.random()*60;
+    osc.type = "square";
+    osc.frequency.setValueAtTime(base, now);
+    osc.frequency.exponentialRampToValueAtTime(120, now+0.08);
+
+    const gn = this.ctx.createGain();
+    gn.gain.setValueAtTime(0.18, now);
+    gn.gain.exponentialRampToValueAtTime(0.001, now+0.09);
+
+    g.gain.setValueAtTime(0.18 + w.recoil*0.05, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now+0.12);
+
+    osc.connect(g);
+    n.connect(gn).connect(g);
+    g.connect(this.ctx.destination);
+
+    osc.start(now);
+    n.start(now);
+    osc.stop(now+0.12);
+  },
+  thump() {
+    if (this.muted || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    const g = this.ctx.createGain();
+    const osc = this.ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(80, now);
+    osc.frequency.exponentialRampToValueAtTime(40, now+0.12);
+    g.gain.setValueAtTime(0.1, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now+0.14);
+    osc.connect(g);
+    g.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now+0.15);
+  },
+  splat() {
+    if (this.muted || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    const noise = this.ctx.createBufferSource();
+    const buf = this.ctx.createBuffer(1, 2205, 44100);
+    const data = buf.getChannelData(0);
+    for (let i=0; i<data.length; i++) data[i] = (Math.random()*2-1) * Math.exp(-i/400);
+    noise.buffer = buf;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.08, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now+0.12);
+    const biq = this.ctx.createBiquadFilter();
+    biq.type = "lowpass";
+    biq.frequency.setValueAtTime(1500, now);
+    noise.connect(biq).connect(g).connect(this.ctx.destination);
+    noise.start(now);
+  },
+  toggleMute() {
+    this.muted = !this.muted;
+    state.muted = this.muted;
+    savePersistent();
+  }
+};
+
+/* =========================
+   Input (desktop + mobile)
+========================= */
+const input = {
+  keys: new Set(),
+  mouse: { x: 0, y: 0, w: 0, h: 0, down: false, rightDown: false, active: false },
+  move: { x: 0, y: 0 }, // from WASD or left stick
+  aim: { x: 1, y: 0 }, // normalized
+  fire: false,
+  autoFire: false,
+  dash: false,
+  onPointerMove(e){
+    const r = canvas.getBoundingClientRect();
+    input.mouse.x = (e.clientX - r.left) * DPR;
+    input.mouse.y = (e.clientY - r.top) * DPR;
+    crosshairEl.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+    crosshairEl.style.display = (window.matchMedia("(pointer: fine)").matches) ? "block" : "none";
+    input.mouse.active = true;
+  },
+  onPointerDown(e){
+    Audio.resumeOnGesture();
+    if (e.button === 2) {
+      input.mouse.rightDown = true; input.dash = true;
+    } else {
+      input.mouse.down = true; input.fire = true;
+      input.autoFire = true; // hold to autofire if weapon supports
+    }
+  },
+  onPointerUp(e){
+    if (e.button === 2) input.mouse.rightDown = false;
+    else { input.mouse.down = false; input.autoFire = false; }
+  }
+};
+window.addEventListener("mousemove", input.onPointerMove);
+window.addEventListener("mousedown", input.onPointerDown);
+window.addEventListener("mouseup", input.onPointerUp);
+window.addEventListener("contextmenu", e=>e.preventDefault());
+window.addEventListener("keydown", (e)=>{
+  if (["INPUT","TEXTAREA"].includes(document.activeElement.tagName)) return;
+  input.keys.add(e.key);
+  if (e.key === " "){ e.preventDefault(); togglePause(); }
+  else if (e.key === "r" || e.key === "R"){ e.preventDefault(); restart(); }
+  else if (e.key === "m" || e.key === "M"){ e.preventDefault(); Audio.toggleMute(); }
+  else if (e.key === "g" || e.key === "G"){ e.preventDefault(); cycleGore(); }
+  else if (e.key === "Shift"){ input.dash = true; }
+});
+window.addEventListener("keyup", (e)=>{ input.keys.delete(e.key); });
+window.addEventListener("blur", ()=>{ input.keys.clear(); input.autoFire=false; input.mouse.down=false; });
+
+function updateKeyboardMoveAim() {
+  const l = input.keys.has("a")||input.keys.has("A")||input.keys.has("ArrowLeft");
+  const r = input.keys.has("d")||input.keys.has("D")||input.keys.has("ArrowRight");
+  const u = input.keys.has("w")||input.keys.has("W")||input.keys.has("ArrowUp");
+  const dn= input.keys.has("s")||input.keys.has("S")||input.keys.has("ArrowDown");
+  const mx = (r?1:0) - (l?1:0);
+  const my = (dn?1:0) - (u?1:0);
+  input.move.x = mx; input.move.y = my;
+  if (input.mouse.active){
+    const dx = input.mouse.x - player.x;
+    const dy = input.mouse.y - player.y;
+    const d = Math.hypot(dx,dy)||1;
+    input.aim.x = dx/d; input.aim.y = dy/d;
+  }
+}
+
+/* Mobile twin sticks */
+const touch = {
+  leftId: -1, rightId: -1,
+  leftCx: 0, leftCy: 0, leftDx: 0, leftDy: 0, leftActive: false,
+  rightCx: 0, rightCy: 0, rightDx: 0, rightDy: 0, rightActive: false,
+  rightTapTimer: 0
+};
+function showStick(el, cx, cy) {
+  el.style.left = cx + "px";
+  el.style.top = cy + "px";
+  el.style.display = "block";
+}
+function moveStick(el, dx, dy) {
+  const nub = el.firstElementChild;
+  nub.style.transform = `translate(${dx*48}px, ${dy*48}px)`;
+}
+function hideStick(el) { el.style.display = "none"; }
+function stickVec(dx, dy) {
+  const d = Math.hypot(dx,dy);
+  if (d<12) return [0,0];
+  const mx = clamp(dx/64, -1,1), my = clamp(dy/64, -1,1);
+  const m = Math.hypot(mx,my) || 1;
+  return [mx/m, my/m];
+}
+window.addEventListener("touchstart", (e)=>{
+  Audio.resumeOnGesture();
+  for (const t of e.changedTouches) {
+    const x = t.clientX, y = t.clientY;
+    if (x < window.innerWidth*0.5 && touch.leftId===-1) {
+      touch.leftId = t.identifier;
+      touch.leftCx = x; touch.leftCy = y;
+      showStick(leftStick, x, y);
+      input.move.x = 0; input.move.y = 0;
+    } else if (touch.rightId===-1) {
+      touch.rightId = t.identifier;
+      touch.rightCx = x; touch.rightCy = y;
+      showStick(rightStick, x, y);
+      // quick tap fires
+      touch.rightTapTimer = performance.now();
+      input.fire = true;
+      input.autoFire = true;
+    }
+  }
+});
+window.addEventListener("touchmove", (e)=>{
+  for (const t of e.changedTouches) {
+    const x = t.clientX, y = t.clientY;
+    if (t.identifier === touch.leftId) {
+      touch.leftDx = x - touch.leftCx;
+      touch.leftDy = y - touch.leftCy;
+      moveStick(leftStick, clamp(touch.leftDx/80,-1,1), clamp(touch.leftDy/80,-1,1));
+      const [mx,my] = stickVec(touch.leftDx, touch.leftDy);
+      input.move.x = mx; input.move.y = 0; // side-scroller style: horizontal only
+    } else if (t.identifier === touch.rightId) {
+      touch.rightDx = x - touch.rightCx;
+      touch.rightDy = y - touch.rightCy;
+      moveStick(rightStick, clamp(touch.rightDx/80,-1,1), clamp(touch.rightDy/80,-1,1));
+      const dx = (x*DPR) - player.x;
+      const dy = (y*DPR) - player.y;
+      const d = Math.hypot(dx,dy)||1;
+      input.aim.x = dx/d; input.aim.y = dy/d;
+    }
+  }
+});
+window.addEventListener("touchend", (e)=>{
+  for (const t of e.changedTouches) {
+    if (t.identifier === touch.leftId) {
+      touch.leftId = -1; hideStick(leftStick); input.move.x = 0; input.move.y = 0;
+    } else if (t.identifier === touch.rightId) {
+      touch.rightId = -1; hideStick(rightStick);
+      input.autoFire = false; input.fire = false;
+    }
+  }
+});
+
+/* =========================
+   Physics: PBD / Verlet
+========================= */
+class Point {
+  constructor(x,y,mass=1,pinned=false){
+    this.x=x; this.y=y; this.px=x; this.py=y;
+    this.mass = mass; this.inv = mass>0 ? 1/mass : 0;
+    this.pinned = pinned;
+  }
+}
+class Constraint {
+  constructor(i,j,rest,stiff=1,breakThresh=Infinity, radius=2, meta=""){
+    this.i=i; this.j=j; this.rest=rest; this.stiff=stiff;
+    this.breakThresh = breakThresh;
+    this.broken = false;
+    this.radius = radius;
+    this.meta = meta; // limb name, for collision groups
+  }
+}
+function integratePoints(points, dt) {
+  const dt2 = dt*dt;
+  const gy = GRAVITY * dt2;
+  for (let p of points) {
+    const vx = (p.x - p.px) * AIR;
+    const vy = (p.y - p.py) * AIR;
+    p.px = p.x; p.py = p.y;
+    if (!p.pinned) {
+      p.x += vx;
+      p.y += vy + gy * p.inv;
+    }
+    // bounds
+    if (p.x < worldLeft){ p.x = worldLeft; }
+    if (p.x > worldRight){ p.x = worldRight; }
+    if (p.y > groundY){ p.y = groundY; }
+    if (p.y < 0){ p.y = 0; }
+  }
+}
+function satisfyConstraints(points, constraints, iter=6) {
+  for (let k=0; k<iter; k++) {
+    for (let c of constraints) {
+      if (c.broken) continue;
+      const a = points[c.i], b = points[c.j];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      let dist = Math.hypot(dx,dy);
+      if (dist === 0) dist = 0.0001;
+      const diff = (dist - c.rest) / dist;
+      const corr = 0.5 * c.stiff * diff;
+      const im = a.inv + b.inv || 1;
+      const na = (a.inv / im) * corr;
+      const nb = (b.inv / im) * corr;
+      if (!a.pinned){ a.x += dx * na; a.y += dy * na; }
+      if (!b.pinned){ b.x -= dx * nb; b.y -= dy * nb; }
+      if (Math.abs(dist - c.rest) > c.breakThresh) {
+        c.broken = true;
+      }
+    }
+  }
+}
+
+/* =========================
+   Stick Schema & Factory
+========================= */
+function makeRagdoll(x, y, scale=1, massScale=1) {
+  const pts = [];
+  const ms = massScale;
+  const Hh = 18*scale;
+  const neckY = y - 28*scale;
+  // base skeleton (side-on)
+  const p = (xx,yy,m=1)=> new Point(xx,yy,m*ms,false);
+  // Indices:
+  // 0 headTop, 1 headBot, 2 neck, 3 chest, 4 pelvis,
+  // 5 lShoulder,6 lElbow,7 lHand, 8 rShoulder,9 rElbow,10 rHand,
+  // 11 lHip,12 lKnee,13 lFoot, 14 rHip,15 rKnee,16 rFoot
+  pts.push(p(x, y - Hh - 10));
+  pts.push(p(x, y - Hh));
+  pts.push(p(x, neckY));
+  pts.push(p(x, y - 34*scale, 1.4));
+  pts.push(p(x, y - 18*scale, 1.6));
+  pts.push(p(x - 10*scale, y - 34*scale, 1.1));
+  pts.push(p(x - 22*scale, y - 26*scale, 1.0));
+  pts.push(p(x - 30*scale, y - 18*scale, 0.9));
+  pts.push(p(x + 10*scale, y - 34*scale, 1.1));
+  pts.push(p(x + 22*scale, y - 26*scale, 1.0));
+  pts.push(p(x + 30*scale, y - 18*scale, 0.9));
+  pts.push(p(x - 8*scale, y - 18*scale, 1.3));
+  pts.push(p(x - 10*scale, y - 6*scale, 1.2));
+  pts.push(p(x - 10*scale, y, 1.0));
+  pts.push(p(x + 8*scale, y - 18*scale, 1.3));
+  pts.push(p(x + 10*scale, y - 6*scale, 1.2));
+  pts.push(p(x + 10*scale, y, 1.0));
+
+  const cons = [];
+  const add = (i,j,stiff,thresh,r,meta)=> cons.push(new Constraint(i,j,Math.hypot(pts[j].x-pts[i].x, pts[j].y-pts[i].y), stiff, thresh, r, meta));
+  // Head & spine
+  add(0,1, 0.95, 9999, 8, "head");
+  add(1,2, 0.95, 5, 5, "neck"); // breakable neck low threshold for comedy
+  add(2,3, 0.95, 9999, 4, "spine");
+  add(3,4, 0.95, 9999, 4, "spine");
+  // Arms
+  add(3,5, 0.75, 9999, 3, "clavicle");
+  add(5,6, 0.95, 9, 3, "upperArm");
+  add(6,7, 0.95, 6, 3, "foreArm"); // breakable
+  add(3,8, 0.75, 9999, 3, "clavicle");
+  add(8,9, 0.95, 9, 3, "upperArm");
+  add(9,10,0.95, 6, 3, "foreArm");
+  // Legs
+  add(4,11,0.95, 9999, 3, "hip");
+  add(11,12,0.95, 7, 3, "thigh");
+  add(12,13,0.95, 6, 3, "shin"); // breakable
+  add(4,14,0.95, 9999, 3, "hip");
+  add(14,15,0.95, 7, 3, "thigh");
+  add(15,16,0.95, 6, 3, "shin");
+
+  // Cross constraints slightly stabilize
+  add(5,3,0.5,9999,2,"stabilize");
+  add(8,3,0.5,9999,2,"stabilize");
+  add(11,4,0.5,9999,2,"stabilize");
+  add(14,4,0.5,9999,2,"stabilize");
+
+  return { points: pts, constraints: cons };
+}
+
+/* =========================
+   Entities: Player, Enemy, Ragdoll
+========================= */
+const player = {
+  x: 200, y: 0, vx: 0, vy: 0, speed: 360,
+  face: 1, onGround: false, dashT: 0,
+  weapon: lastWeaponKey,
+  fireCooldown: 0,
+};
+
+function resetPlayer() {
+  player.x = W*0.25; player.y = groundY; player.vx=0; player.vy=0; player.face=1;
+  player.fireCooldown = 0;
+  state.weapon = player.weapon;
+}
+
+const enemies = []; // alive (pre-ragdoll)
+const ragdolls = [];
+const bullets = []; // tracers
+const particles = []; // blood particles
+const flashes = []; // muzzle flashes
+
+function spawnEnemy(type="runner"){
+  const side = Math.random()<0.5 ? -1 : 1;
+  const x = side<0 ? worldLeft+40 : worldRight-40;
+  const y = groundY;
+  const m = (type==="brute")? 1.35 : 1.0;
+  const hp = (type==="brute")? 100 : 45;
+  enemies.push({
+    type, x,y, vx: 0, vy: 0,
+    speed: (type==="brute")? 100: 160,
+    hp, alive: true, t: 0, massScale: m, targetX: player.x
+  });
+}
+
+function killEnemy(e, impulseDir=[1,0], isHead=false) {
+  e.alive = false;
+  const r = makeRagdoll(e.x, e.y, 1, e.massScale);
+  // small horizontal spread for dramatic collapse
+  for (let p of r.points) {
+    p.x += (Math.random()-0.5)*4;
+    p.y += -Math.random()*2;
+  }
+  // Apply impulse along direction
+  const J = 10 * (isHead ? 1.2 : 1.0);
+  for (let p of r.points) {
+    p.x += impulseDir[0] * J * (0.5 + Math.random());
+    p.y += impulseDir[1] * J * (0.5 + Math.random());
+  }
+  r.life = 10; // seconds before despawn
+  ragdolls.push(r);
+  if (ragdolls.length > MAX_RAGDOLLS) ragdolls.shift();
+}
+
+function enemyThink(dt, e) {
+  e.t += dt;
+  const dir = Math.sign(player.x - e.x);
+  e.vx = dir * e.speed;
+  e.x += e.vx * dt;
+  e.x = clamp(e.x, worldLeft+20, worldRight-20);
+}
+
+function addScore(base, head=false, mult=1) {
+  let add = base * (head?1.5:1) * state.combo;
+  add = Math.round(add);
+  state.score += add;
+  state.combo = clamp(state.combo + 0.15, 1, 4);
+  state.comboTimer = 1.2;
+  if (state.score > state.high){ state.high = state.score; savePersistent(); }
+}
+
+function restart() {
+  state.score = 0; state.combo = 1; state.comboTimer = 0;
+  enemies.length = 0; ragdolls.length = 0; particles.length = 0; bullets.length = 0; flashes.length = 0;
+  state.wave = 1; state.slowMoTarget=1; state.slowMoTimer=0; state.hitPauseTimer=0; state.shake=0;
+  resetPlayer();
+  spawnWave();
+}
+
+function togglePause(force=null) {
+  if (force===true || (!state.paused)) {
+    state.paused = true;
+    pauseOverlay.style.display = "flex";
+  } else {
+    state.paused = false;
+    pauseOverlay.style.display = "none";
+  }
+}
+
+/* =========================
+   Waves & Spawner
+========================= */
+function spawnWave() {
+  const n = 3 + Math.floor((state.wave-1) * 1.5);
+  const bruteRatio = clamp(0.1 + (state.wave-1)*0.08, 0.1, 0.6);
+  for (let i=0;i<n;i++){
+    const type = Math.random()<bruteRatio ? "brute" : "runner";
+    setTimeout(()=>spawnEnemy(type), i*250);
+  }
+}
+
+/* =========================
+   Weapons, Bullets, Collisions
+========================= */
+function fireWeapon() {
+  const w = WEAPONS[state.weapon];
+  if (!w) return;
+  if (player.fireCooldown > 0) return;
+  const rate = 60 / (w.rpm/60); // seconds per shot
+  player.fireCooldown = 60 / w.rpm;
+
+  const ang = Math.atan2(input.aim.y, input.aim.x);
+  for (let b=0;b<w.bullets;b++){
+    const spr = (Math.random()*2-1) * w.spread * (Math.PI/180);
+    const a = ang + spr;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    const muzzleX = player.x + 16*dx;
+    const muzzleY = player.y - 30 + 16*dy;
+    const range = 900;
+    const endX = muzzleX + dx * range;
+    const endY = muzzleY + dy * range;
+
+    const impact = hitscan(muzzleX,muzzleY, endX,endY, w);
+    bullets.push({ x0:muzzleX, y0:muzzleY, x1:impact.x, y1:impact.y, t:0.08 });
+
+    flashes.push({ x:muzzleX, y:muzzleY, a, t:0.05 });
+
+    // recoil & shake
+    const kick = w.recoil * 10;
+    player.x -= dx * kick * 0.4;
+    state.shake = Math.max(state.shake, w.recoil * 6);
+  }
+  Audio.shoot(state.weapon);
+}
+
+function hitscan(x0,y0, x1,y1, w) {
+  let nearest = { t: 1, x: x1, y: y1, hit: null, isHead: false, rag:false };
+  // Alive enemies: simple stick capsule via pose
+  for (let e of enemies) if (e.alive) {
+    const pose = enemyPose(e);
+    // Check bones list (subset for perf)
+    for (let seg of pose.bones) {
+      const {ax,ay,bx,by,r, head} = seg;
+      const t = intersectRayCapsule(x0,y0,x1,y1, ax,ay,bx,by,r);
+      if (t !== null && t < nearest.t) {
+        nearest.t = t;
+        nearest.x = x0 + (x1-x0)*t;
+        nearest.y = y0 + (y1-y0)*t;
+        nearest.hit = e; nearest.isHead = !!head; nearest.rag = false;
+      }
+    }
+  }
+  // Ragdolls: detailed bones
+  for (let rd of ragdolls) {
+    for (let c of rd.constraints) {
+      if (c.broken) continue;
+      const a = rd.points[c.i], b = rd.points[c.j];
+      const t = intersectRayCapsule(x0,y0,x1,y1, a.x,a.y,b.x,b.y, c.radius);
+      if (t !== null && t < nearest.t) {
+        nearest.t = t;
+        nearest.x = x0 + (x1-x0)*t;
+        nearest.y = y0 + (y1-y0)*t;
+        nearest.hit = { rd, c }; nearest.isHead = c.meta==="head"; nearest.rag = true;
+      }
+    }
+  }
+
+  if (nearest.hit) {
+    const nx = (x1-x0), ny = (y1-y0); const dir = norm(nx,ny);
+    if (!nearest.rag) {
+      // damage and ragdoll
+      const e = nearest.hit;
+      const dmg = w.dmg;
+      e.hp -= dmg;
+      spawnBlood(nearest.x, nearest.y, dir, w, nearest.isHead);
+      splatAt(nearest.x, nearest.y, nearest.isHead?1.2:0.7);
+      Audio.thump();
+      if (e.hp <= 0) {
+        killEnemy(e, dir, nearest.isHead);
+        addScore(50, nearest.isHead);
+        if (nearest.isHead) triggerSlowMo();
+      } else {
+        // knockback small
+        e.x += dir[0] * 8 * w.knock;
+      }
+    } else {
+      // ragdoll impulse + break chance
+      const { rd, c } = nearest.hit;
+      applyImpulseToConstraint(rd, c, dir, w);
+      spawnBlood(nearest.x, nearest.y, dir, w, nearest.isHead);
+      splatAt(nearest.x, nearest.y, nearest.isHead?1.1:0.6);
+      if (nearest.isHead) triggerSlowMo();
+    }
+  }
+  return nearest;
+}
+
+function intersectRayCapsule(x0,y0,x1,y1, ax,ay,bx,by, radius) {
+  // Ray as segment [x0,y0]->[x1,y1]
+  // Return t in [0,1] of ray where closest approach <= radius
+  // We'll approximate via closest point between segments using projection.
+  const abx = bx - ax, aby = by - ay;
+  const rdx = x1 - x0, rdy = y1 - y0;
+  const ab2 = abx*abx + aby*aby;
+  const r2 = rdx*rdx + rdy*rdy;
+  const eps = 1e-6;
+  let t = 0.0;
+  // coarse approach: sample t by projecting the capsule segment endpoints onto ray and checking neighborhood
+  const candidates = [];
+  const ta = closestTOnSegment(ax, ay, x0,y0,x1,y1);
+  const tb = closestTOnSegment(bx, by, x0,y0,x1,y1);
+  candidates.push(ta, tb, clamp(((ax-x0)*rdx + (ay-y0)*rdy)/r2, 0,1), clamp(((bx-x0)*rdx + (by-y0)*rdy)/r2,0,1));
+  let bestT = null;
+  for (let c of candidates) {
+    const px = x0 + rdx*c, py = y0 + rdy*c;
+    const d = distPointToSegment(px,py, ax,ay,bx,by);
+    if (d <= radius+1) {
+      if (bestT===null || c<bestT) bestT = c;
+    }
+  }
+  return bestT;
+}
+
+function applyImpulseToConstraint(rd, c, dir, w) {
+  const a = rd.points[c.i], b = rd.points[c.j];
+  const p = 10 * w.knock;
+  a.x += dir[0] * p * (a.inv/(a.inv+b.inv));
+  a.y += dir[1] * p * (a.inv/(a.inv+b.inv));
+  b.x += dir[0] * p * (b.inv/(a.inv+b.inv));
+  b.y += dir[1] * p * (b.inv/(a.inv+b.inv));
+  // chance to break for forearm/shin/neck
+  if ((c.meta==="foreArm"||c.meta==="shin"||c.meta==="neck") && Math.random() < 0.35) {
+    c.broken = true;
+  }
+}
+
+function spawnBlood(x,y, dir, w, head=false) {
+  if (goreMode==="Off") return;
+  const max = state.perf.particleCap;
+  const base = head ? 28 : 16;
+  const mult = goreMode==="Full" ? 1.5 : 1.0;
+  let count = Math.min(max - particles.length, Math.floor(base * mult));
+  for (let i=0;i<count;i++){
+    const spd = randRange(120, 350) * (head?1.2:1.0);
+    const ang = Math.atan2(dir[1], dir[0]) + randRange(-0.8, 0.8);
+    const vx = Math.cos(ang)*spd, vy = Math.sin(ang)*spd - randRange(0,120);
+    particles.push({ x, y, vx, vy, life: randRange(0.6, 1.4), drag: randRange(0.96, 0.985), sz: randRange(1.2, 2.6) });
+  }
+  if (count>0) Audio.splat();
+}
+
+function splatAt(x, y, size=1) {
+  if (goreMode==="Off") return;
+  splatCtx.save();
+  splatCtx.globalAlpha = 0.6;
+  splatCtx.fillStyle = COLORS.blood;
+  const n = 4 + Math.floor(Math.random()*6*size);
+  for (let i=0;i<n;i++){
+    const r = randRange(3, 12) * size;
+    const a = Math.random()*Math.PI*2;
+    splatCtx.beginPath();
+    splatCtx.ellipse(x, y, r, r*randRange(0.5,1.2), a, 0, TAU);
+    splatCtx.fill();
+  }
+  splatCtx.restore();
+}
+
+/* =========================
+   VFX: Muzzle, Particles
+========================= */
+function updateParticles(dt) {
+  for (let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.vx *= p.drag; p.vy = p.vy * p.drag + GRAVITY*dt*0.35;
+    p.x += p.vx*dt; p.y += p.vy*dt;
+    if (p.y > groundY){ p.y = groundY; p.vx*=0.6; p.vy = -p.vy*0.2; }
+    p.life -= dt;
+    if (p.life <= 0){ particles.splice(i,1); }
+  }
+}
+
+function updateFlashes(dt) {
+  for (let i=flashes.length-1;i>=0;i--){
+    const f = flashes[i];
+    f.t -= dt;
+    if (f.t <= 0) flashes.splice(i,1);
+  }
+}
+
+/* =========================
+   Rendering
+========================= */
+function drawGround() {
+  ctx.save();
+  // soft shadow
+  ctx.fillStyle = COLORS.shadow;
+  ctx.fillRect(0, groundY+2, W, 8);
+  ctx.strokeStyle = COLORS.ground;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(worldLeft, groundY);
+  ctx.lineTo(worldRight, groundY);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawPlayer() {
+  ctx.save();
+  ctx.strokeStyle = COLORS.stick;
+  ctx.lineWidth = 4;
+  // simple stick figure placeholder
+  const px = player.x, py = player.y;
+  // body
+  ctx.beginPath();
+  ctx.moveTo(px, py-40);
+  ctx.lineTo(px, py-10);
+  ctx.stroke();
+  // head
+  ctx.beginPath();
+  ctx.arc(px, py-54, 8, 0, TAU);
+  ctx.stroke();
+  // arms
+  ctx.beginPath();
+  ctx.moveTo(px, py-34); ctx.lineTo(px + player.face*12, py-28);
+  ctx.stroke();
+  // legs
+  ctx.beginPath();
+  ctx.moveTo(px, py-10); ctx.lineTo(px-8, py);
+  ctx.moveTo(px, py-10); ctx.lineTo(px+8, py);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawRagdoll(rd) {
+  ctx.save();
+  ctx.strokeStyle = COLORS.stick;
+  ctx.lineWidth = 3;
+  for (let c of rd.constraints) {
+    if (c.broken) continue;
+    const a = rd.points[c.i], b = rd.points[c.j];
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  // draw head as circle
+  const ht = rd.points[0], hb = rd.points[1];
+  const cx = (ht.x + hb.x)/2, cy = (ht.y + hb.y)/2;
+  const r = Math.hypot(ht.x - hb.x, ht.y - hb.y)/2 + 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, TAU);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawEnemies() {
+  ctx.save();
+  ctx.strokeStyle = COLORS.stick;
+  ctx.lineWidth = 3;
+  for (let e of enemies) if (e.alive) {
+    const p = enemyPose(e);
+    // bones
+    for (let b of p.bones) {
+      ctx.beginPath();
+      ctx.moveTo(b.ax, b.ay);
+      ctx.lineTo(b.bx, b.by);
+      ctx.stroke();
+    }
+    // head
+    ctx.beginPath();
+    ctx.arc(p.head.cx, p.head.cy, p.head.r, 0, TAU);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawParticles() {
+  if (goreMode==="Off") return;
+  ctx.save();
+  ctx.fillStyle = COLORS.blood;
+  for (let p of particles) {
+    ctx.globalAlpha = clamp(p.life, 0, 1);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.sz, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawMuzzleFlashes() {
+  ctx.save();
+  for (let f of flashes) {
+    const s = 20;
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.a);
+    ctx.fillStyle = COLORS.muzzle;
+    ctx.globalAlpha = clamp(f.t/0.05, 0, 1);
+    ctx.beginPath();
+    ctx.moveTo(0,0);
+    ctx.lineTo(18, -6);
+    ctx.lineTo(28, 0);
+    ctx.lineTo(18, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.setTransform(1,0,0,1,0,0);
+  }
+  ctx.restore();
+}
+
+function drawBullets() {
+  ctx.save();
+  ctx.strokeStyle = COLORS.tracer;
+  for (let b of bullets) {
+    ctx.globalAlpha = clamp(b.t/0.08, 0, 1);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(b.x0, b.y0);
+    ctx.lineTo(b.x1, b.y1);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* =========================
+   Enemy Pose for Alive
+========================= */
+function enemyPose(e) {
+  const bob = Math.sin(e.t*8) * 2;
+  const x = e.x, y = e.y;
+  const headTop = {x, y: y-56 + bob};
+  const headBot = {x, y: y-42 + bob};
+  const neck = {x, y: y-38 + bob};
+  const chest = {x, y: y-36 + bob};
+  const pelvis = {x, y: y-20 + bob};
+  // arms
+  const lShoulder = {x: x-10, y: y-36 + bob};
+  const rShoulder = {x: x+10, y: y-36 + bob};
+  const lElbow = {x: x-22, y: y-28 + bob};
+  const rElbow = {x: x+22, y: y-28 + bob};
+  const lHand = {x: x-30, y: y-20 + bob};
+  const rHand = {x: x+30, y: y-20 + bob};
+  // legs
+  const lHip = {x: x-6, y: y-20 + bob};
+  const rHip = {x: x+6, y: y-20 + bob};
+  const lKnee = {x: x-8, y: y-8 + bob};
+  const rKnee = {x: x+8, y: y-8 + bob};
+  const lFoot = {x: x-8, y: y + bob};
+  const rFoot = {x: x+8, y: y + bob};
+
+  const bones = [];
+  const push = (A,B,r,head=false)=> bones.push({ ax:A.x,ay:A.y,bx:B.x,by:B.y,r, head });
+  push(headTop, headBot, 8, true);
+  push(headBot, neck, 5, true);
+  push(neck, chest, 4);
+  push(chest, pelvis, 4);
+  push(chest, lShoulder, 3);
+  push(lShoulder, lElbow, 3);
+  push(lElbow, lHand, 3);
+  push(chest, rShoulder, 3);
+  push(rShoulder, rElbow, 3);
+  push(rElbow, rHand, 3);
+  push(pelvis, lHip, 3);
+  push(lHip, lKnee, 3);
+  push(lKnee, lFoot, 3);
+  push(pelvis, rHip, 3);
+  push(rHip, rKnee, 3);
+  push(rKnee, rFoot, 3);
+  const headCX = (headTop.x+headBot.x)/2, headCY=(headTop.y+headBot.y)/2;
+  return { bones, head: { cx:headCX, cy:headCY, r:10 } };
+}
+
+/* =========================
+   Game Loop & Update
+========================= */
+let last = now();
+let acc = 0;
+const FIXED_DT = 1/60;
+
+function triggerSlowMo() {
+  state.slowMoTarget = 0.35;
+  state.slowMoTimer = 0.6;
+  state.hitPauseTimer = 0.06 + Math.random()*0.02;
+}
+
+function update(dt) {
+  // Performance monitor
+  state.perf.frameMsAvg = lerp(state.perf.frameMsAvg, dt*1000, 0.05);
+  if (state.perf.frameMsAvg > 28) {
+    // degrade
+    state.perf.iterTarget = 3;
+    state.perf.particleCap = goreMode==="Full"?300:180;
+    state.perf.dprTier = Math.min(state.perf.dprTier+1, DPR_CAPS.length-1);
+  } else if (state.perf.frameMsAvg > 16) {
+    state.perf.iterTarget = 4;
+    state.perf.particleCap = goreMode==="Full"?360:220;
+  } else {
+    state.perf.iterTarget = 6;
+    state.perf.particleCap = goreMode==="Full"?400:250;
+    state.perf.dprTier = Math.max(0, state.perf.dprTier-1);
+  }
+
+  // Timers
+  state.comboTimer -= dt;
+  if (state.comboTimer <= 0) state.combo = Math.max(1, state.combo - 0.02);
+
+  if (state.hitPauseTimer > 0) {
+    state.hitPauseTimer -= dt;
+    return; // freeze
+  }
+
+  if (state.slowMoTimer > 0) {
+    state.slowMoTimer -= dt;
+    if (state.slowMoTimer <= 0) state.slowMoTarget = 1.0;
+  }
+  state.slowMoT = lerp(state.slowMoT, state.slowMoTarget, 0.1);
+
+  // Input
+  updateKeyboardMoveAim();
+  if ((input.autoFire && WEAPONS[state.weapon].auto) || (input.mouse.down) || (touch.rightId!==-1 && WEAPONS[state.weapon].auto)) {
+    input.fire = true;
+  }
+
+  // Player movement (side scroll)
+  const move = clamp(input.move.x, -1, 1);
+  const maxSpeed = player.speed;
+  player.vx = lerp(player.vx, move*maxSpeed, 0.2);
+  player.x += player.vx * dt;
+  player.x = clamp(player.x, worldLeft+20, worldRight-20);
+  player.y = groundY; player.onGround=true;
+  player.face = input.aim.x >= 0 ? 1 : -1;
+
+  // Dash
+  if (input.dash) {
+    player.x += player.face * 80;
+    input.dash = false;
+  }
+
+  // Shooting
+  player.fireCooldown -= dt;
+  if (input.fire) {
+    fireWeapon();
+    input.fire = false;
+  }
+
+  // Enemies
+  for (let e of enemies) if (e.alive) enemyThink(dt*state.slowMoT, e);
+
+  // Ragdolls physics
+  for (let rd of ragdolls) {
+    integratePoints(rd.points, dt*state.slowMoT);
+    satisfyConstraints(rd.points, rd.constraints, state.perf.iterTarget);
+    rd.life -= dt;
+  }
+  // Despawn old
+  for (let i=ragdolls.length-1;i>=0;i--){
+    if (ragdolls[i].life <= 0) ragdolls.splice(i,1);
+  }
+
+  // VFX
+  updateParticles(dt*state.slowMoT);
+  updateFlashes(dt*state.slowMoT);
+
+  // Bullets fade
+  for (let i=bullets.length-1;i>=0;i--){
+    const b = bullets[i];
+    b.t -= dt; if (b.t<=0) bullets.splice(i,1);
+  }
+
+  // Wave logic: if no alive enemies and no pending spawns, start next wave
+  if (!enemies.some(e=>e.alive)) {
+    state.wave++;
+    addScore(100);
+    spawnWave();
+  }
+
+  // Shake decay
+  state.shake *= 0.9;
+}
+
+function render() {
+  ctx.save();
+  // Ensure white background regardless of context alpha handling
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0,0,W,H);
+
+  // Camera shake
+  const ox = (Math.random()-0.5)*state.shake*DPR*1.5;
+  const oy = (Math.random()-0.5)*state.shake*DPR*1.5;
+  ctx.translate(ox, oy);
+
+  // Decals
+  ctx.drawImage(splatCanvas, 0,0);
+
+  // Ground + alive (non-ragdoll)
+  drawGround();
+  drawPlayer();
+  drawEnemies();
+
+  // Ragdolls
+  for (let rd of ragdolls) drawRagdoll(rd);
+
+  // Particles
+  drawParticles();
+
+  // Muzzle + crosshair lines
+  drawMuzzleFlashes();
+  drawBullets();
+
+  ctx.restore();
+}
+
+function loop() {
+  const t = now();
+  let dt = (t - last)/1000;
+  last = t;
+
+  if (!state.paused) {
+    dt = Math.min(dt, 0.05);
+    acc += dt;
+    const step = FIXED_DT * state.slowMoT;
+    while (acc >= step) {
+      update(FIXED_DT);
+      acc -= step;
+    }
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* =========================
+   UI & Buttons
+========================= */
+btns.pause.onclick = ()=> togglePause();
+btns.pauseM.onclick = ()=> togglePause();
+btns.resume.onclick = ()=> togglePause(false);
+btns.overlayRestart.onclick = ()=> { togglePause(false); restart(); };
+btns.restart.onclick = restart;
+btns.restartM.onclick = restart;
+btns.mute.onclick = ()=> { Audio.toggleMute(); btns.mute.textContent = state.muted?"Unmute":"Mute"; btns.muteM.textContent = btns.mute.textContent; };
+btns.muteM.onclick = btns.mute.onclick;
+btns.gore.onclick = cycleGore;
+
+/* =========================
+   Init
+========================= */
+function init() {
+  resize();
+  state.combo = 1;
+  player.weapon = state.weapon;
+  updateHUD();
+  restart();
+  btns.mute.textContent = state.muted ? "Unmute" : "Mute";
+  btns.muteM.textContent = btns.mute.textContent;
+  document.body.addEventListener("pointerdown", ()=>Audio.resumeOnGesture(), { once: true });
+}
+
+init();
+requestAnimationFrame(loop);
+
+/* =========================
+   Acceptance: keyboard help in console
+========================= */
+// console.log("Controls: WASD/Arrows to move, Mouse to aim/shoot, Shift dash, Space pause, R restart, M mute, G gore");
+
+/* =========================
+   Helper: weapon switch between waves (simple)
+========================= */
+function maybeUpgradeWeapon() {
+  // simple rotate each wave for demo
+  const idx = WEAPON_ORDER.indexOf(state.weapon);
+  const next = WEAPON_ORDER[(idx+1)%WEAPON_ORDER.length];
+  state.weapon = next; player.weapon = next;
+  updateHUD(); savePersistent();
+}
+setInterval(()=> {
+  // occasionally upgrade
+  if (!state.paused && Math.random()<0.2) maybeUpgradeWeapon();
+}, 6000);
+
+/* =========================
+   END
+========================= */
+</script>
+</body>
+</html>
+<!-- END -->
