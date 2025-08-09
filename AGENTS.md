@@ -1,0 +1,1 @@
+- Update the HTML file instead of rewriting it. 
